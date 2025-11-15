@@ -1,471 +1,317 @@
-import React, { useState, useEffect } from 'react';
-import { TreeDeciduous, Home, Factory, Mountain, Waves, Zap, DollarSign, Users, Trophy, Crown } from 'lucide-react';
+import React, { useState } from 'react';
+import { FileText, Languages, Upload, Download, Settings } from 'lucide-react';
 
-const TERRAIN_TYPES = {
-  sea: { name: '海', color: 'bg-blue-400', icon: null },
-  plains: { name: '平地', color: 'bg-green-200', icon: null },
-  forest: { name: '森', color: 'bg-green-600', icon: TreeDeciduous },
-  town: { name: '町', color: 'bg-gray-400', icon: Home },
-  city: { name: '都市', color: 'bg-gray-600', icon: Factory },
-  mountain: { name: '山', color: 'bg-gray-700', icon: Mountain },
-  factory: { name: '工場', color: 'bg-yellow-600', icon: Factory },
-  farm: { name: '農場', color: 'bg-yellow-300', icon: null }
-};
+export default function PDFTranslator() {
+  const [file, setFile] = useState(null);
+  const [translatedText, setTranslatedText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [apiChoice, setApiChoice] = useState('deepl');
+  const [apiKey, setApiKey] = useState('');
+  const [sourceLang, setSourceLang] = useState('auto');
+  const [targetLang, setTargetLang] = useState('JA');
+  const [showSettings, setShowSettings] = useState(false);
 
-const COMMANDS = [
-  { id: 'reclaim', name: '整地', cost: 5, description: '海を平地にする' },
-  { id: 'plant', name: '植林', cost: 50, description: '平地に森を作る' },
-  { id: 'build_town', name: '町建設', cost: 100, description: '平地に町を建設' },
-  { id: 'build_factory', name: '工場建設', cost: 200, description: '平地に工場を建設' },
-  { id: 'build_farm', name: '農場建設', cost: 150, description: '平地に農場を建設' }
-];
+  const handleFileChange = (e) => {
+    const selectedFile = e.target.files[0];
+    if (selectedFile && selectedFile.type === 'application/pdf') {
+      setFile(selectedFile);
+      setTranslatedText('');
+    } else {
+      alert('PDFファイルを選択してください');
+    }
+  };
 
-const PLAYER_COLORS = [
-  'border-red-500',
-  'border-blue-500',
-  'border-green-500',
-  'border-yellow-500',
-  'border-purple-500',
-  'border-pink-500'
-];
-
-const HakoniwaIslands = () => {
-  const [gameState, setGameState] = useState('setup'); // setup, playing, ended
-  const [players, setPlayers] = useState([]);
-  const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
-  const [globalTurn, setGlobalTurn] = useState(0);
-  const [selectedCommand, setSelectedCommand] = useState(null);
-  const [logs, setLogs] = useState([]);
-  const [playerName, setPlayerName] = useState('');
-  const [winner, setWinner] = useState(null);
-
-  const createInitialGrid = () => {
-    const grid = [];
-    for (let y = 0; y < 10; y++) {
-      const row = [];
-      for (let x = 0; x < 10; x++) {
-        if (x === 0 || x === 9 || y === 0 || y === 9) {
-          row.push('sea');
-        } else if (x >= 4 && x <= 5 && y >= 4 && y <= 5) {
-          row.push('town');
-        } else if (Math.random() > 0.7) {
-          row.push('forest');
-        } else {
-          row.push('plains');
+  const extractTextFromPDF = async (file) => {
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      
+      let text = '';
+      const decoder = new TextDecoder('utf-8');
+      const content = decoder.decode(uint8Array);
+      
+      const streamRegex = /stream\s*([\s\S]*?)\s*endstream/g;
+      let match;
+      
+      while ((match = streamRegex.exec(content)) !== null) {
+        const streamContent = match[1];
+        const textRegex = /\((.*?)\)/g;
+        let textMatch;
+        while ((textMatch = textRegex.exec(streamContent)) !== null) {
+          text += textMatch[1] + ' ';
         }
       }
-      grid.push(row);
-    }
-    return grid;
-  };
-
-  const addPlayer = () => {
-    if (playerName.trim() && players.length < 6) {
-      const newPlayer = {
-        id: Date.now(),
-        name: playerName.trim(),
-        funds: 1000,
-        population: 100,
-        grid: createInitialGrid(),
-        score: 0,
-        color: PLAYER_COLORS[players.length]
-      };
-      setPlayers([...players, newPlayer]);
-      setPlayerName('');
-      addLog(`${newPlayer.name}が参加しました！`);
+      
+      text = text.replace(/\\n/g, '\n').replace(/\\/g, '').trim();
+      
+      if (!text) {
+        const rawText = content.match(/\(([^)]+)\)/g);
+        if (rawText) {
+          text = rawText.map(t => t.slice(1, -1)).join(' ');
+        }
+      }
+      
+      return text || 'テキストの抽出に失敗しました。画像ベースのPDFの可能性があります。';
+    } catch (error) {
+      console.error('PDF解析エラー:', error);
+      throw new Error('PDFの読み込みに失敗しました');
     }
   };
 
-  const startGame = () => {
-    if (players.length >= 2) {
-      setGameState('playing');
-      addLog('ゲーム開始！');
-    }
-  };
-
-  const addLog = (message) => {
-    setLogs(prev => [{ turn: globalTurn, message }, ...prev.slice(0, 19)]);
-  };
-
-  const calculateScore = (player) => {
-    return player.funds + player.population * 2;
-  };
-
-  const handleCellClick = (x, y) => {
-    if (gameState !== 'playing') return;
-    
-    const currentPlayer = players[currentPlayerIndex];
-    if (!selectedCommand) {
-      addLog('コマンドを選択してください');
-      return;
+  const translateWithDeepL = async (text, targetLang) => {
+    if (!apiKey) {
+      throw new Error('DeepL APIキーが設定されていません');
     }
 
-    const currentTerrain = currentPlayer.grid[y][x];
-    const command = COMMANDS.find(c => c.id === selectedCommand);
-
-    if (currentPlayer.funds < command.cost) {
-      addLog(`${currentPlayer.name}: 資金が足りません！`);
-      return;
-    }
-
-    let newTerrain = null;
-    let success = false;
-
-    switch (selectedCommand) {
-      case 'reclaim':
-        if (currentTerrain === 'sea') {
-          newTerrain = 'plains';
-          success = true;
-        }
-        break;
-      case 'plant':
-        if (currentTerrain === 'plains') {
-          newTerrain = 'forest';
-          success = true;
-        }
-        break;
-      case 'build_town':
-        if (currentTerrain === 'plains') {
-          newTerrain = 'town';
-          success = true;
-        }
-        break;
-      case 'build_factory':
-        if (currentTerrain === 'plains') {
-          newTerrain = 'factory';
-          success = true;
-        }
-        break;
-      case 'build_farm':
-        if (currentTerrain === 'plains') {
-          newTerrain = 'farm';
-          success = true;
-        }
-        break;
-    }
-
-    if (success && newTerrain) {
-      const newGrid = currentPlayer.grid.map((row, rowIndex) =>
-        rowIndex === y ? row.map((cell, colIndex) =>
-          colIndex === x ? newTerrain : cell
-        ) : row
-      );
-
-      const updatedPlayers = players.map((p, idx) =>
-        idx === currentPlayerIndex
-          ? { ...p, grid: newGrid, funds: p.funds - command.cost }
-          : p
-      );
-
-      setPlayers(updatedPlayers);
-      addLog(`${currentPlayer.name}: ${command.name}を実行 (${x}, ${y})`);
-    } else {
-      addLog(`${currentPlayer.name}: そこには建設できません`);
-    }
-  };
-
-  const endTurn = () => {
-    const currentPlayer = players[currentPlayerIndex];
-    let newFunds = currentPlayer.funds;
-    let newPopulation = currentPlayer.population;
-
-    currentPlayer.grid.forEach(row => {
-      row.forEach(cell => {
-        switch (cell) {
-          case 'town':
-            newFunds += 10;
-            newPopulation += 10;
-            break;
-          case 'city':
-            newFunds += 30;
-            newPopulation += 30;
-            break;
-          case 'factory':
-            newFunds += 50;
-            break;
-          case 'farm':
-            newFunds += 20;
-            break;
-          case 'forest':
-            newFunds += 2;
-            break;
-        }
-      });
+    const response = await fetch('https://api-free.deepl.com/v2/translate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        auth_key: apiKey,
+        text: text,
+        target_lang: targetLang,
+        source_lang: sourceLang === 'auto' ? '' : sourceLang
+      })
     });
 
-    const foodCost = Math.floor(newPopulation / 10);
-    newFunds -= foodCost;
-
-    const updatedPlayers = players.map((p, idx) =>
-      idx === currentPlayerIndex
-        ? { ...p, funds: Math.max(0, newFunds), population: newPopulation, score: calculateScore({ funds: newFunds, population: newPopulation }) }
-        : p
-    );
-
-    setPlayers(updatedPlayers);
-
-    const nextPlayerIndex = (currentPlayerIndex + 1) % players.length;
-    setCurrentPlayerIndex(nextPlayerIndex);
-
-    if (nextPlayerIndex === 0) {
-      const newGlobalTurn = globalTurn + 1;
-      setGlobalTurn(newGlobalTurn);
-      addLog(`===== ターン ${newGlobalTurn} 終了 =====`);
-
-      if (newGlobalTurn >= 20) {
-        endGame(updatedPlayers);
-      }
+    if (!response.ok) {
+      throw new Error('DeepL API翻訳エラー: ' + response.statusText);
     }
 
-    setSelectedCommand(null);
+    const data = await response.json();
+    return data.translations[0].text;
   };
 
-  const endGame = (finalPlayers) => {
-    const sortedPlayers = [...finalPlayers].sort((a, b) => b.score - a.score);
-    setWinner(sortedPlayers[0]);
-    setGameState('ended');
-    addLog(`🎉 ゲーム終了！優勝: ${sortedPlayers[0].name}`);
-  };
+  const translateWithGoogle = async (text, targetLang) => {
+    if (!apiKey) {
+      throw new Error('Google翻訳APIキーが設定されていません');
+    }
 
-  const resetGame = () => {
-    setPlayers([]);
-    setCurrentPlayerIndex(0);
-    setGlobalTurn(0);
-    setGameState('setup');
-    setLogs([]);
-    setWinner(null);
-  };
-
-  const TerrainCell = ({ terrain, x, y }) => {
-    const terrainInfo = TERRAIN_TYPES[terrain];
-    const Icon = terrainInfo.icon;
-
-    return (
-      <div
-        onClick={() => handleCellClick(x, y)}
-        className={`${terrainInfo.color} w-10 h-10 border border-gray-300 cursor-pointer hover:opacity-80 flex items-center justify-center transition-all`}
-        title={`${terrainInfo.name} (${x}, ${y})`}
-      >
-        {Icon && <Icon size={16} className="text-white" />}
-      </div>
+    const response = await fetch(
+      `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          q: text,
+          target: targetLang.toLowerCase(),
+          source: sourceLang === 'auto' ? undefined : sourceLang.toLowerCase()
+        })
+      }
     );
+
+    if (!response.ok) {
+      throw new Error('Google翻訳APIエラー: ' + response.statusText);
+    }
+
+    const data = await response.json();
+    return data.data.translations[0].translatedText;
   };
 
-  const currentPlayer = players[currentPlayerIndex];
-  const rankedPlayers = [...players].sort((a, b) => b.score - a.score);
+  const handleTranslate = async () => {
+    if (!file) {
+      alert('PDFファイルを選択してください');
+      return;
+    }
 
-  if (gameState === 'setup') {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-100 to-green-100 p-8 flex items-center justify-center">
-        <div className="bg-white rounded-lg shadow-2xl p-8 max-w-md w-full">
-          <h1 className="text-4xl font-bold text-center mb-6 text-gray-800">箱庭諸島 対戦モード</h1>
-          
-          <div className="space-y-4 mb-6">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && addPlayer()}
-                placeholder="プレイヤー名を入力"
-                className="flex-1 px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 outline-none"
-                maxLength={20}
-              />
-              <button
-                onClick={addPlayer}
-                disabled={players.length >= 6}
-                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 font-semibold"
-              >
-                追加
-              </button>
-            </div>
+    if (!apiKey) {
+      alert('APIキーを設定してください');
+      setShowSettings(true);
+      return;
+    }
 
-            <div className="bg-gray-50 rounded-lg p-4 min-h-[120px]">
-              <h3 className="font-bold mb-2 text-gray-700">参加プレイヤー ({players.length}/6)</h3>
-              {players.length === 0 ? (
-                <p className="text-gray-500 text-sm">最低2人のプレイヤーが必要です</p>
-              ) : (
-                <ul className="space-y-2">
-                  {players.map((player, idx) => (
-                    <li key={player.id} className={`flex items-center gap-2 border-l-4 ${player.color} pl-2`}>
-                      <span className="font-semibold">{idx + 1}.</span> {player.name}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
+    setLoading(true);
+    try {
+      const extractedText = await extractTextFromPDF(file);
+      
+      let translated;
+      if (apiChoice === 'deepl') {
+        translated = await translateWithDeepL(extractedText, targetLang);
+      } else {
+        translated = await translateWithGoogle(extractedText, targetLang);
+      }
+      
+      setTranslatedText(translated);
+    } catch (error) {
+      alert('エラー: ' + error.message);
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-          <button
-            onClick={startGame}
-            disabled={players.length < 2}
-            className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 disabled:bg-gray-400 font-bold text-lg"
-          >
-            ゲーム開始 (20ターン制)
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (gameState === 'ended') {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-yellow-100 to-orange-100 p-8 flex items-center justify-center">
-        <div className="bg-white rounded-lg shadow-2xl p-8 max-w-2xl w-full">
-          <div className="text-center mb-8">
-            <Crown className="w-20 h-20 mx-auto mb-4 text-yellow-500" />
-            <h1 className="text-4xl font-bold mb-2 text-gray-800">ゲーム終了！</h1>
-            <p className="text-2xl text-gray-600">優勝: {winner?.name}</p>
-          </div>
-
-          <div className="space-y-3 mb-8">
-            {rankedPlayers.map((player, idx) => (
-              <div
-                key={player.id}
-                className={`flex items-center justify-between p-4 rounded-lg border-l-4 ${player.color} ${
-                  idx === 0 ? 'bg-yellow-50' : 'bg-gray-50'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-2xl font-bold text-gray-600">#{idx + 1}</span>
-                  <div>
-                    <div className="font-bold text-lg">{player.name}</div>
-                    <div className="text-sm text-gray-600">
-                      資金: {player.funds}億円 / 人口: {player.population}人
-                    </div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-2xl font-bold text-blue-600">{player.score}</div>
-                  <div className="text-xs text-gray-500">スコア</div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <button
-            onClick={resetGame}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 font-bold text-lg"
-          >
-            新しいゲームを開始
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const handleDownload = () => {
+    const blob = new Blob([translatedText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'translated_text.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-100 to-green-100 p-8">
-      <div className="max-w-7xl mx-auto">
-        <h1 className="text-4xl font-bold text-center mb-2 text-gray-800">箱庭諸島 対戦モード</h1>
-        <p className="text-center text-gray-600 mb-6">ターン {globalTurn}/20</p>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+      <div className="max-w-4xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-xl p-8">
+          <div className="flex items-center justify-between mb-8">
+            <div className="flex items-center gap-3">
+              <FileText className="w-10 h-10 text-indigo-600" />
+              <h1 className="text-3xl font-bold text-gray-800">PDF翻訳ツール</h1>
+            </div>
+            <button
+              onClick={() => setShowSettings(!showSettings)}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <Settings className="w-6 h-6 text-gray-600" />
+            </button>
+          </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          <div className="lg:col-span-3">
-            <div className={`bg-white rounded-lg shadow-lg p-6 border-4 ${currentPlayer?.color || 'border-gray-300'}`}>
-              <div className="flex justify-between items-center mb-4">
-                <div>
-                  <h2 className="text-2xl font-bold text-gray-800">{currentPlayer?.name}のターン</h2>
-                  <p className="text-sm text-gray-600">島の開発</p>
-                </div>
-                <div className="flex gap-4 text-sm">
-                  <div className="flex items-center gap-1">
-                    <DollarSign size={16} />
-                    <span className="font-semibold">{currentPlayer?.funds}億円</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Users size={16} />
-                    <span className="font-semibold">{currentPlayer?.population}人</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Trophy size={16} />
-                    <span className="font-semibold">{currentPlayer?.score}pts</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="inline-block border-4 border-gray-400 mb-4">
-                {currentPlayer?.grid.map((row, y) => (
-                  <div key={y} className="flex">
-                    {row.map((cell, x) => (
-                      <TerrainCell key={`${x}-${y}`} terrain={cell} x={x} y={y} />
-                    ))}
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={endTurn}
-                  className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 font-semibold"
+          {showSettings && (
+            <div className="mb-6 p-6 bg-gray-50 rounded-xl border-2 border-gray-200">
+              <h2 className="text-lg font-semibold mb-4 text-gray-700">設定</h2>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  翻訳API
+                </label>
+                <select
+                  value={apiChoice}
+                  onChange={(e) => setApiChoice(e.target.value)}
+                  className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 >
-                  ターン終了
+                  <option value="deepl">DeepL API</option>
+                  <option value="google">Google翻訳 API</option>
+                </select>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  APIキー
+                </label>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={apiChoice === 'deepl' ? 'DeepL APIキー' : 'Google APIキー'}
+                  className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
+                <p className="mt-2 text-sm text-gray-500">
+                  {apiChoice === 'deepl' 
+                    ? 'DeepL APIキーは https://www.deepl.com/pro-api で取得できます'
+                    : 'Google Cloud Console で翻訳APIを有効化してキーを取得してください'}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    翻訳元言語
+                  </label>
+                  <select
+                    value={sourceLang}
+                    onChange={(e) => setSourceLang(e.target.value)}
+                    className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="auto">自動検出</option>
+                    <option value="EN">英語</option>
+                    <option value="JA">日本語</option>
+                    <option value="ZH">中国語</option>
+                    <option value="KO">韓国語</option>
+                    <option value="ES">スペイン語</option>
+                    <option value="FR">フランス語</option>
+                    <option value="DE">ドイツ語</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    翻訳先言語
+                  </label>
+                  <select
+                    value={targetLang}
+                    onChange={(e) => setTargetLang(e.target.value)}
+                    className="w-full p-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="JA">日本語</option>
+                    <option value="EN">英語</option>
+                    <option value="ZH">中国語</option>
+                    <option value="KO">韓国語</option>
+                    <option value="ES">スペイン語</option>
+                    <option value="FR">フランス語</option>
+                    <option value="DE">ドイツ語</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mb-6">
+            <label className="flex flex-col items-center justify-center w-full h-48 border-4 border-dashed border-indigo-300 rounded-xl cursor-pointer hover:border-indigo-500 hover:bg-indigo-50 transition-all">
+              <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                <Upload className="w-12 h-12 text-indigo-400 mb-3" />
+                <p className="mb-2 text-lg font-semibold text-gray-700">
+                  {file ? file.name : 'PDFファイルをアップロード'}
+                </p>
+                <p className="text-sm text-gray-500">クリックしてファイルを選択</p>
+              </div>
+              <input
+                type="file"
+                accept=".pdf"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </label>
+          </div>
+
+          <button
+            onClick={handleTranslate}
+            disabled={loading || !file}
+            className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 px-6 rounded-xl font-semibold text-lg hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3 shadow-lg"
+          >
+            {loading ? (
+              <>
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                翻訳中...
+              </>
+            ) : (
+              <>
+                <Languages className="w-6 h-6" />
+                翻訳を開始
+              </>
+            )}
+          </button>
+
+          {translatedText && (
+            <div className="mt-8">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold text-gray-800">翻訳結果</h2>
+                <button
+                  onClick={handleDownload}
+                  className="flex items-center gap-2 bg-green-600 text-white py-2 px-4 rounded-lg hover:bg-green-700 transition-colors"
+                >
+                  <Download className="w-5 h-5" />
+                  ダウンロード
                 </button>
               </div>
-            </div>
-          </div>
-
-          <div className="space-y-6">
-            <div className="bg-white rounded-lg shadow-lg p-6">
-              <h3 className="text-xl font-bold mb-4 text-gray-800">開発コマンド</h3>
-              <div className="space-y-2">
-                {COMMANDS.map(cmd => (
-                  <button
-                    key={cmd.id}
-                    onClick={() => setSelectedCommand(cmd.id)}
-                    className={`w-full text-left p-3 rounded-lg border-2 transition-all ${
-                      selectedCommand === cmd.id
-                        ? 'border-blue-600 bg-blue-50'
-                        : 'border-gray-200 hover:border-blue-300'
-                    }`}
-                  >
-                    <div className="font-semibold text-sm">{cmd.name}</div>
-                    <div className="text-xs text-gray-600">{cmd.description}</div>
-                    <div className="text-xs text-gray-500 mt-1">費用: {cmd.cost}億円</div>
-                  </button>
-                ))}
+              <div className="bg-gray-50 p-6 rounded-xl border-2 border-gray-200 max-h-96 overflow-y-auto">
+                <pre className="whitespace-pre-wrap text-gray-800 font-sans">
+                  {translatedText}
+                </pre>
               </div>
             </div>
+          )}
+        </div>
 
-            <div className="bg-white rounded-lg shadow-lg p-6">
-              <h3 className="text-xl font-bold mb-4 text-gray-800 flex items-center gap-2">
-                <Trophy size={20} />
-                ランキング
-              </h3>
-              <div className="space-y-2">
-                {rankedPlayers.map((player, idx) => (
-                  <div
-                    key={player.id}
-                    className={`p-2 rounded-lg border-l-4 ${player.color} ${
-                      player.id === currentPlayer?.id ? 'bg-blue-50' : 'bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <span className="font-bold">#{idx + 1}</span> {player.name}
-                      </div>
-                      <div className="text-sm font-bold text-blue-600">{player.score}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow-lg p-6">
-              <h3 className="text-xl font-bold mb-4 text-gray-800">ログ</h3>
-              <div className="space-y-1 text-xs max-h-48 overflow-y-auto">
-                {logs.map((log, i) => (
-                  <div key={i} className="text-gray-700 border-b border-gray-100 pb-1">
-                    <span className="text-gray-500">[T{log.turn}]</span> {log.message}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+        <div className="mt-6 text-center text-sm text-gray-600">
+          <p>※ このツールはクライアントサイドで動作します。ファイルはブラウザ内でのみ処理されます。</p>
+          <p className="mt-2">※ 画像ベースのPDFは正しく翻訳できない場合があります。</p>
         </div>
       </div>
     </div>
   );
-};
-
-export default HakoniwaIslands;
+}
